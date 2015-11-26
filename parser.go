@@ -8,11 +8,13 @@ import (
 	"regexp"
 	"strconv"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/go-sql-driver/mysql"
 )
 
-var FILE_NAME = "src/Parser/losangeles.txt"
-var DB_NAME = "src/Parser/restaurants.db"
+const FILE_NAME = "src/Parser/losangeles.txt"
+
+//const FILE_NAME = "src/Parser/test.txt"
+const DB_NAME = "restaurant:restuarant@/restaurants"
 
 var restaurantRegex = regexp.MustCompile(`^\s*(.+?) - rank: (\d+), stars:(\d+\.?\d*)\s*$`)
 
@@ -74,6 +76,13 @@ func (p parser) parseReview(line, restaurantId string) error {
 	helpfulVotes := lineData[5]
 	date := lineData[6]
 
+	// malformed data: one reviewer is does not have a username at all, one is a space
+	if reviewer == "" {
+		reviewer = "[[EMPTY]]"
+	} else if reviewer == " " {
+		reviewer = "[[SPACE]]"
+	}
+
 	if numReviews == "None" {
 		numReviews = "0"
 	}
@@ -124,7 +133,7 @@ func (p parser) parseRestaurant(line string) (string, error) {
 }
 
 func main() {
-	connection, err := sql.Open("sqlite3", DB_NAME)
+	connection, err := sql.Open("mysql", DB_NAME)
 	if err != nil {
 		fmt.Println("Error opening database connection", err)
 		return
@@ -135,31 +144,46 @@ func main() {
 	if err != nil {
 		fmt.Println("Error opening file '", FILE_NAME, "':", err)
 	}
+	connection.Exec("SET FOREIGN_KEY_CHECKS = 0")
+	connection.Exec("TRUNCATE TABLE restaurant")
+	connection.Exec("TRUNCATE TABLE reviewer")
+	connection.Exec("TRUNCATE TABLE review")
+	connection.Exec("SET FOREIGN_KEY_CHECKS = 1")
 	scanner := bufio.NewScanner(file)
 	var currentRestaurantId string
 	counter := 0
+	nextLineIsRestaurant := false
 	for scanner.Scan() {
 		counter += 1
-		if counter%15 == 0 {
-			fmt.Print(" ", counter, "/37287 lines parsed\r")
-		}
+		//if counter%100 == 0 {
 		line := scanner.Text()
-		if len(line) == 0 || line[0] == '-' {
+		if len(line) == 0 {
 			continue
 		}
 
-		if _, err = strconv.Atoi(string(line[0])); err == nil {
-			//review
-			err = parser.parseReview(line, currentRestaurantId)
+		if line[0] == '-' {
+			if line[0] == '-' {
+				nextLineIsRestaurant = true
+			}
+			continue
+		}
+		if counter%15 == 0 {
+			fmt.Print(" ", counter, "/37287 lines parsed\r")
+		}
+
+		if nextLineIsRestaurant {
+			// restaurant
+			nextLineIsRestaurant = false
+			currentRestaurantId, err = parser.parseRestaurant(line)
 			if err != nil {
-				fmt.Println("Failed to parse a review!", err)
+				fmt.Println("Failed to parse a restaurant!", counter, err)
 				return
 			}
 		} else {
-			// restaurant
-			currentRestaurantId, err = parser.parseRestaurant(line)
+			//review
+			err = parser.parseReview(line, currentRestaurantId)
 			if err != nil {
-				fmt.Println("Failed to parse a restaurant!", err)
+				fmt.Println("Failed to parse a review!", counter, err)
 				return
 			}
 		}
